@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
-import { Button, Card, Chip, Divider, IconButton, Surface, Text, TextInput, useTheme } from 'react-native-paper'
+import { Button, Card, Chip, Dialog, Divider, IconButton, Portal, Surface, Text, TextInput, useTheme } from 'react-native-paper'
 import type { EchoMobileProject } from './mobileTypes'
 
 export function ScreenFrame({
@@ -77,6 +77,34 @@ export function EmptyState({
       {body ? <Text style={styles.muted}>{body}</Text> : null}
       {actionLabel && onAction ? (
         <Button mode="contained" icon="plus" onPress={onAction} style={styles.topGap}>
+          {actionLabel}
+        </Button>
+      ) : null}
+    </Surface>
+  )
+}
+
+export function StatusBanner({
+  title,
+  body,
+  tone = 'neutral',
+  actionLabel,
+  onAction
+}: {
+  title: string
+  body?: string
+  tone?: 'good' | 'warn' | 'bad' | 'neutral'
+  actionLabel?: string
+  onAction?: () => void
+}) {
+  return (
+    <Surface mode="flat" style={[styles.banner, styles[`banner_${tone}`]]}>
+      <View style={styles.recordText}>
+        <Text variant="titleSmall">{title}</Text>
+        {body ? <Text style={styles.muted}>{body}</Text> : null}
+      </View>
+      {actionLabel && onAction ? (
+        <Button mode="contained-tonal" compact onPress={onAction}>
           {actionLabel}
         </Button>
       ) : null}
@@ -187,6 +215,86 @@ export function PillRow({
   )
 }
 
+export function ViewTabs({
+  title,
+  items,
+  selected,
+  onSelect
+}: {
+  title?: string
+  items: Array<{ key: string; label: string; icon?: string }>
+  selected: string
+  onSelect: (key: string) => void
+}) {
+  return (
+    <Surface mode="flat" style={styles.navPanel}>
+      {title ? <Text style={styles.metricLabel}>{title}</Text> : null}
+      <View style={styles.rowWrap}>
+        {items.map((item) => (
+          <Chip
+            key={item.key}
+            icon={item.icon}
+            selected={selected === item.key}
+            showSelectedOverlay
+            onPress={() => onSelect(item.key)}
+          >
+            {item.label}
+          </Chip>
+        ))}
+      </View>
+    </Surface>
+  )
+}
+
+export function ConfirmAction({
+  label,
+  icon,
+  mode = 'outlined',
+  compact,
+  disabled,
+  confirmTitle,
+  confirmBody,
+  onConfirm
+}: {
+  label: string
+  icon?: string
+  mode?: 'text' | 'outlined' | 'contained' | 'elevated' | 'contained-tonal'
+  compact?: boolean
+  disabled?: boolean
+  confirmTitle: string
+  confirmBody: string
+  onConfirm: () => void
+}) {
+  const [visible, setVisible] = useState(false)
+  return (
+    <>
+      <Button compact={compact} mode={mode} icon={icon} disabled={disabled} onPress={() => setVisible(true)}>
+        {label}
+      </Button>
+      <Portal>
+        <Dialog visible={visible} onDismiss={() => setVisible(false)}>
+          <Dialog.Title>{confirmTitle}</Dialog.Title>
+          <Dialog.Content>
+            <Text>{confirmBody}</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setVisible(false)}>Cancel</Button>
+            <Button
+              mode="contained"
+              onPress={() => {
+                setVisible(false)
+                onConfirm()
+              }}
+            >
+              Confirm
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+    </>
+  )
+}
+
 export function RecordCard({
   title,
   subtitle,
@@ -202,17 +310,40 @@ export function RecordCard({
   onPress?: () => void
   onDelete?: () => void
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false)
   return (
-    <Card mode={selected ? 'elevated' : 'contained'} style={[styles.recordCard, selected ? styles.selectedCard : null]} onPress={onPress}>
-      <Card.Content style={styles.recordContent}>
-        <View style={styles.recordText}>
-          <Text variant="titleSmall">{title}</Text>
-          {subtitle ? <Text style={styles.muted} numberOfLines={2}>{subtitle}</Text> : null}
-        </View>
-        {right}
-        {onDelete ? <IconButton icon="delete-outline" size={20} onPress={onDelete} /> : null}
-      </Card.Content>
-    </Card>
+    <>
+      <Card mode={selected ? 'elevated' : 'contained'} style={[styles.recordCard, selected ? styles.selectedCard : null]} onPress={onPress}>
+        <Card.Content style={styles.recordContent}>
+          <View style={styles.recordText}>
+            <Text variant="titleSmall">{title}</Text>
+            {subtitle ? <Text style={styles.muted} numberOfLines={2}>{subtitle}</Text> : null}
+          </View>
+          {right ? <View style={styles.recordRight}>{right}</View> : null}
+          {onDelete ? <IconButton icon="delete-outline" size={20} onPress={() => setConfirmDelete(true)} /> : null}
+        </Card.Content>
+      </Card>
+      <Portal>
+        <Dialog visible={confirmDelete} onDismiss={() => setConfirmDelete(false)}>
+          <Dialog.Title>Delete item?</Dialog.Title>
+          <Dialog.Content>
+            <Text>This removes {title} from the local project.</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setConfirmDelete(false)}>Cancel</Button>
+            <Button
+              mode="contained"
+              onPress={() => {
+                setConfirmDelete(false)
+                onDelete?.()
+              }}
+            >
+              Delete
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+    </>
   )
 }
 
@@ -265,6 +396,31 @@ export const styles = StyleSheet.create({
     backgroundColor: '#101d28',
     gap: 8
   },
+  banner: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    gap: 10,
+    backgroundColor: '#101d28'
+  },
+  banner_good: {
+    borderColor: '#2c6d46',
+    borderWidth: 1
+  },
+  banner_warn: {
+    borderColor: '#8f6d2b',
+    borderWidth: 1
+  },
+  banner_bad: {
+    borderColor: '#8a3b42',
+    borderWidth: 1
+  },
+  banner_neutral: {
+    borderColor: '#243747',
+    borderWidth: 1
+  },
   topGap: {
     marginTop: 8,
     alignSelf: 'flex-start'
@@ -287,6 +443,12 @@ export const styles = StyleSheet.create({
     flexWrap: 'wrap',
     alignItems: 'center'
   },
+  navPanel: {
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#0d1721',
+    gap: 8
+  },
   section: {
     gap: 10
   },
@@ -307,12 +469,18 @@ export const styles = StyleSheet.create({
   },
   recordContent: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8
   },
   recordText: {
     flex: 1,
+    minWidth: 160,
     gap: 2
+  },
+  recordRight: {
+    maxWidth: '100%',
+    flexShrink: 1
   },
   divider: {
     backgroundColor: '#243747',

@@ -53,9 +53,18 @@ finally {
 $sourceApk = Join-Path $targetRoot "android\app\build\outputs\apk\debug\app-debug.apk"
 $outDir = Join-Path $sourceRoot "dist\android"
 $outApk = Join-Path $outDir "echo-studio-mobile-debug.apk"
+$packageJson = Get-Content -Raw -LiteralPath (Join-Path $sourceRoot "package.json") | ConvertFrom-Json
+$releaseDir = Join-Path $outDir "release"
+$versionedDebugApk = Join-Path $releaseDir "echo-studio-mobile-v$($packageJson.version)-debug.apk"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 Copy-Item -Force -LiteralPath $sourceApk -Destination $outApk
+Copy-Item -Force -LiteralPath $sourceApk -Destination $versionedDebugApk
 
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $outApk
+$versionedHash = Get-FileHash -Algorithm SHA256 -LiteralPath $versionedDebugApk
+Set-Content -LiteralPath "$versionedDebugApk.sha256" -Value "$($versionedHash.Hash.ToLowerInvariant())  $(Split-Path -Leaf $versionedDebugApk)"
 Write-Output "Built $outApk"
 Write-Output "SHA256 $($hash.Hash)"
+Write-Output "Built $versionedDebugApk"
+Write-Output "DEBUG_SHA256 $($versionedHash.Hash.ToLowerInvariant())"

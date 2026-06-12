@@ -9,7 +9,6 @@ import {
   IconButton,
   List,
   Portal,
-  SegmentedButtons,
   Switch,
   Text,
   TextInput
@@ -61,7 +60,8 @@ import {
   pushProjectToGitHub,
   pushProjectBranchAndCreatePullRequest,
   startGitHubDeviceLogin,
-  triggerRemoteBuild
+  triggerRemoteBuild,
+  validateGitHubAccess
 } from './github'
 import {
   CONTENT_TYPES,
@@ -78,9 +78,12 @@ import {
   upsertContent
 } from './projectModel'
 import { ensureNotificationPermissions, notifyStudio } from './notifications'
+import { APP_INFO } from './appInfo'
+import { expectedReleaseArtifacts } from './releaseArtifacts'
 import { useActiveProject, useStudioStore } from './storage'
 import {
   ActionRow,
+  ConfirmAction,
   EmptyState,
   Field,
   Hairline,
@@ -90,6 +93,8 @@ import {
   RecordCard,
   ScreenFrame,
   Section,
+  StatusBanner,
+  ViewTabs,
   styles
 } from './components'
 import type {
@@ -100,6 +105,7 @@ import type {
   EchoMobileProject,
   GitHubDeviceCodeState,
   MobileSettings,
+  ReleaseArtifact,
   ReleaseIndexCatalogEntry
 } from './mobileTypes'
 
@@ -126,6 +132,12 @@ const NATIVE_READY_ITEMS = [
   { key: 'full', label: 'Full' }
 ]
 const SETTINGS_HINT = 'Set a GitHub token and repo target first.'
+const RELEASE_CHECKLIST = [
+  'Version and changelog are final',
+  'Validation has no blockers',
+  'GitHub target and token access pass',
+  'Signed APK/AAB plus checksum files were generated'
+]
 
 function csv(values?: string[]): string {
   return (values ?? []).join(', ')
@@ -151,6 +163,29 @@ function saveAndToast(project: EchoMobileProject, message: string) {
   const setToast = useStudioStore.getState().setToast
   saveProject(project)
   setToast(message)
+}
+
+function bytesLabel(bytes: number): string {
+  if (!bytes) return 'pending'
+  if (bytes > 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  if (bytes > 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${bytes} B`
+}
+
+function ArtifactList({ artifacts }: { artifacts: ReleaseArtifact[] }) {
+  return (
+    <>
+      {artifacts.map((artifact) => (
+        <RecordCard
+          key={`${artifact.kind}:${artifact.path}`}
+          title={artifact.name}
+          subtitle={`${artifact.kind} / ${bytesLabel(artifact.bytes)} / ${artifact.sha256}`}
+          right={<Chip compact>{artifact.path.endsWith('.sha256') ? 'checksum' : artifact.kind}</Chip>}
+          onPress={() => artifact.path.startsWith('http') && openUrl(artifact.path)}
+        />
+      ))}
+    </>
+  )
 }
 
 export function HomeScreen({ navigation }: { navigation: { navigate: (screen: string) => void } }) {
@@ -186,6 +221,12 @@ export function HomeScreen({ navigation }: { navigation: { navigate: (screen: st
         <Metric label="Blockers" value={totals.blockers} tone={totals.blockers ? 'bad' : 'good'} />
         <Metric label="Errors" value={totals.errors} tone={totals.errors ? 'warn' : 'good'} />
       </View>
+      <StatusBanner
+        title={`${APP_INFO.name} ${APP_INFO.version}`}
+        body={`Build ${APP_INFO.buildHash}. Latest release and source are available on GitHub.`}
+        actionLabel="Release"
+        onAction={() => openUrl(APP_INFO.releaseUrl)}
+      />
       {!settings.onboardingComplete ? (
         <Section title="Start">
           <View style={styles.rowWrap}>
@@ -313,12 +354,12 @@ export function CreateScreen({ navigation }: { navigation: { navigate: (screen: 
       title="Create"
       subtitle="Wizard and template flows share the desktop ECHO Studio contracts."
       actions={
-        <SegmentedButtons
-          value={mode}
-          onValueChange={setMode}
-          buttons={[
-            { value: 'wizard', label: 'Wizard', icon: 'auto-fix' },
-            { value: 'templates', label: 'Templates', icon: 'view-grid-plus-outline' }
+        <ViewTabs
+          selected={mode}
+          onSelect={setMode}
+          items={[
+            { key: 'wizard', label: 'Wizard', icon: 'auto-fix' },
+            { key: 'templates', label: 'Templates', icon: 'view-grid-plus-outline' }
           ]}
         />
       }
@@ -466,31 +507,34 @@ export function ContentScreen() {
   return (
     <ScreenFrame title="Content" subtitle={project.manifest.id}>
       <ProjectStrip project={project} />
-      <SegmentedButtons
-        value={view}
-        onValueChange={(value) => setView(value as ContentView)}
-        buttons={[
-          { value: 'manifest', label: 'Manifest', icon: 'file-document-edit-outline' },
-          { value: 'modules', label: 'Modules', icon: 'graph-outline' },
-          { value: 'editors', label: 'Editors', icon: 'pencil-box-outline' },
-          { value: 'validation', label: 'Check', icon: 'shield-search' }
+      <ViewTabs
+        title="Design"
+        selected={view}
+        onSelect={(value) => setView(value as ContentView)}
+        items={[
+          { key: 'manifest', label: 'Manifest', icon: 'file-document-edit-outline' },
+          { key: 'modules', label: 'Modules', icon: 'graph-outline' },
+          { key: 'editors', label: 'Editors', icon: 'pencil-box-outline' }
         ]}
       />
-      <SegmentedButtons
-        value={view}
-        onValueChange={(value) => setView(value as ContentView)}
-        buttons={[
-          { value: 'tasks', label: 'Tasks', icon: 'clipboard-check-outline' },
-          { value: 'sync', label: 'Sync', icon: 'source-branch-sync' },
-          { value: 'catalog', label: 'Catalog', icon: 'archive-search-outline' },
-          { value: 'release', label: 'Release', icon: 'tag-plus-outline' }
+      <ViewTabs
+        title="Quality"
+        selected={view}
+        onSelect={(value) => setView(value as ContentView)}
+        items={[
+          { key: 'validation', label: 'Check', icon: 'shield-search' },
+          { key: 'tasks', label: 'Tasks', icon: 'clipboard-check-outline' },
+          { key: 'sync', label: 'Sync', icon: 'source-branch-sync' }
         ]}
       />
-      <SegmentedButtons
-        value={view}
-        onValueChange={(value) => setView(value as ContentView)}
-        buttons={[
-          { value: 'settings', label: 'Settings', icon: 'cog-outline' }
+      <ViewTabs
+        title="Ship"
+        selected={view}
+        onSelect={(value) => setView(value as ContentView)}
+        items={[
+          { key: 'catalog', label: 'Catalog', icon: 'archive-search-outline' },
+          { key: 'release', label: 'Release', icon: 'tag-plus-outline' },
+          { key: 'settings', label: 'Settings', icon: 'cog-outline' }
         ]}
       />
       {view === 'manifest' ? <ManifestPanel project={project} /> : null}
@@ -890,7 +934,15 @@ function CodexTasksPanel({ project }: { project: EchoMobileProject }) {
             <View style={styles.rowWrap}>
               <Chip compact>{task.lane}</Chip>
               <Button compact mode="outlined" onPress={() => setLane(task.id, 'waiting_review')}>Approve</Button>
-              <Button compact mode="contained-tonal" onPress={() => apply(task.id)} disabled={!task.canApply}>Apply</Button>
+              <ConfirmAction
+                compact
+                mode="contained-tonal"
+                label="Apply"
+                disabled={!task.canApply}
+                confirmTitle="Apply task?"
+                confirmBody={`This updates ${task.affectedFiles.length} file(s): ${task.affectedFiles.join(', ')}`}
+                onConfirm={() => apply(task.id)}
+              />
               <IconButton icon="close" size={18} onPress={() => setLane(task.id, 'rejected')} />
             </View>
           }
@@ -925,6 +977,7 @@ function SyncPanel({ project }: { project: EchoMobileProject }) {
   const [message, setMessage] = useState('')
   const withTarget = () => ({ ...project, github: { owner, repo, branch }, dirty: true, updatedAt: Date.now() })
   const conflicts = project.conflicts ?? []
+  const targetForCheck = () => ({ owner, repo, branch })
   return (
     <Section title="Git / Sync">
       <Field label="Owner" value={owner} onChangeText={setOwner} />
@@ -934,6 +987,24 @@ function SyncPanel({ project }: { project: EchoMobileProject }) {
       <ActionRow>
         <Button mode="outlined" icon="content-save" onPress={() => saveAndToast(withTarget(), 'GitHub target saved')}>Save Target</Button>
         <Button
+          mode="outlined"
+          icon="shield-check-outline"
+          disabled={busy || !owner || !repo}
+          onPress={async () => {
+            setBusy(true)
+            try {
+              const access = await validateGitHubAccess(settings, targetForCheck())
+              setMessage(`GitHub OK: ${access.login} can access ${access.repo}@${access.branch}. Scopes: ${access.scopes.join(', ') || 'none reported'}.`)
+            } catch (error) {
+              setMessage(error instanceof Error ? error.message : String(error))
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          Check Access
+        </Button>
+        <Button
           mode="contained"
           icon="cloud-upload-outline"
           disabled={busy || !owner || !repo}
@@ -941,6 +1012,7 @@ function SyncPanel({ project }: { project: EchoMobileProject }) {
             setBusy(true)
             try {
               const next = withTarget()
+              await validateGitHubAccess(settings, next.github)
               const result = await pushProjectToGitHub(next, settings, `Update ${project.manifest.name} from ECHO Studio Mobile`)
               saveAndToast({ ...next, dirty: false, lastSyncAt: Date.now() }, result.message)
               setMessage(result.url ?? result.message)
@@ -961,6 +1033,7 @@ function SyncPanel({ project }: { project: EchoMobileProject }) {
             setBusy(true)
             try {
               const targetProject = withTarget()
+              await validateGitHubAccess(settings, targetProject.github)
               const files = await pullProjectFilesFromGitHub(targetProject, settings)
               const detected = detectSyncConflicts(targetProject, files)
               const next = mergePulledFiles(targetProject, files, detected)
@@ -982,6 +1055,7 @@ function SyncPanel({ project }: { project: EchoMobileProject }) {
           disabled={!owner || !repo}
           onPress={async () => {
             try {
+              await validateGitHubAccess(settings, targetForCheck())
               const url = await pushProjectBranchAndCreatePullRequest(
                 withTarget(),
                 settings,
@@ -997,22 +1071,22 @@ function SyncPanel({ project }: { project: EchoMobileProject }) {
         >
           Open PR
         </Button>
-        <Button
-          mode="outlined"
+        <ConfirmAction
+          label="Use Remote"
           icon="check-all"
           disabled={conflicts.length === 0}
-          onPress={() => saveAndToast(resolveAllSyncConflicts(project, 'remote'), 'All remote versions applied')}
-        >
-          Use Remote
-        </Button>
-        <Button
-          mode="outlined"
+          confirmTitle="Use all remote versions?"
+          confirmBody={`This replaces local content for ${conflicts.length} conflicted file(s).`}
+          onConfirm={() => saveAndToast(resolveAllSyncConflicts(project, 'remote'), 'All remote versions applied')}
+        />
+        <ConfirmAction
+          label="Keep Local"
           icon="content-save-check-outline"
           disabled={conflicts.length === 0}
-          onPress={() => saveAndToast(resolveAllSyncConflicts(project, 'local'), 'All local versions kept')}
-        >
-          Keep Local
-        </Button>
+          confirmTitle="Keep all local versions?"
+          confirmBody={`This keeps local content for ${conflicts.length} conflicted file(s) and leaves the project dirty.`}
+          onConfirm={() => saveAndToast(resolveAllSyncConflicts(project, 'local'), 'All local versions kept')}
+        />
         {busy ? <ActivityIndicator /> : null}
       </ActionRow>
       {conflicts.length ? (
@@ -1021,7 +1095,7 @@ function SyncPanel({ project }: { project: EchoMobileProject }) {
             <RecordCard
               key={conflict.id}
               title={conflict.path}
-              subtitle={`Local ${conflict.localContent.length} chars / Remote ${conflict.remoteContent.length} chars`}
+              subtitle={`Local ${conflict.localContent.length} chars / Remote ${conflict.remoteContent.length} chars / ${buildUnifiedTextDiff(conflict.path, conflict.remoteContent, conflict.localContent).split('\n').length} diff lines`}
               right={
                 <View style={styles.rowWrap}>
                   <Button compact mode="outlined" onPress={() => saveAndToast(resolveSyncConflict(project, conflict.id, 'local'), `${conflict.path} kept local`)}>Local</Button>
@@ -1103,73 +1177,93 @@ function CatalogPanel({ project }: { project: EchoMobileProject }) {
 
 function ReleasePanel({ project }: { project: EchoMobileProject }) {
   const settings = useStudioStore((state) => state.settings)
+  const saveSettings = useStudioStore((state) => state.saveSettings)
   const [version, setVersion] = useState(project.manifest.version)
   const [changelog, setChangelog] = useState(`## ${project.manifest.version}\n- Mobile release draft.\n`)
   const [entry, setEntry] = useState('')
   const [resultUrl, setResultUrl] = useState(project.releaseDraft?.url ?? '')
   const [busy, setBusy] = useState(false)
   const packageManifest = buildAddonPackageManifest(project.manifest)
+  const report = runValidationCheck(project.manifest)
+  const plannedArtifacts = project.releaseArtifacts?.length ? project.releaseArtifacts : expectedReleaseArtifacts(settings.releaseBuildMode)
+  const draftRelease = async () => {
+    setBusy(true)
+    try {
+      await validateGitHubAccess(settings, project.github)
+      const url = await createGitHubReleaseDraft(project, settings, changelog)
+      const releaseIndexEntry = await buildReleaseIndexEntry(project)
+      saveAndToast({
+        ...project,
+        releaseArtifacts: plannedArtifacts,
+        releaseDraft: {
+          tag: `v${project.manifest.version}`,
+          name: project.manifest.name,
+          url,
+          createdAt: Date.now(),
+          releaseIndexEntry
+        }
+      }, 'GitHub release draft created')
+      await saveSettings({ ...settings, lastReleaseUrl: url })
+      setEntry(releaseIndexEntry)
+      setResultUrl(url)
+      await notifyStudio(settings, 'Release draft created', `${project.manifest.name} ${project.manifest.version} is ready for review.`)
+    } catch (error) {
+      useStudioStore.getState().setToast(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const openIndexPullRequest = async () => {
+    setBusy(true)
+    try {
+      await validateGitHubAccess(settings, { owner: settings.releaseIndexOwner, repo: settings.releaseIndexRepo, branch: settings.defaultBranch })
+      const entryText = entry || await buildReleaseIndexEntry(project)
+      setEntry(entryText)
+      const url = await createReleaseIndexPullRequest(project, settings, entryText)
+      setResultUrl(url)
+      await saveSettings({ ...settings, lastReleaseUrl: url })
+      await notifyStudio(settings, 'Release Index PR created', `${project.manifest.name} is queued for catalog review.`)
+    } catch (error) {
+      useStudioStore.getState().setToast(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <Section title="Release">
+      <StatusBanner
+        title={report.publishingReady ? 'Release checklist ready' : 'Release checklist needs attention'}
+        body={`${RELEASE_CHECKLIST.join(' / ')}. Current mode: ${settings.releaseBuildMode}.`}
+        tone={report.counts.BLOCKER ? 'bad' : report.counts.ERROR ? 'warn' : 'good'}
+      />
       <Field label="Version" value={version} onChangeText={setVersion} />
       <Field label="Changelog" value={changelog} onChangeText={setChangelog} multiline />
       <ActionRow>
         <Button mode="outlined" icon="tag-edit-outline" onPress={() => saveAndToast(updateProjectManifest(project, { ...project.manifest, version }), 'Version updated')}>Bump Version</Button>
-        <Button
-          mode="contained"
+        <ConfirmAction
+          label="Draft Release"
           icon="github"
+          mode="contained"
           disabled={busy}
-          onPress={async () => {
-            setBusy(true)
-            try {
-              const url = await createGitHubReleaseDraft(project, settings, changelog)
-              const releaseIndexEntry = await buildReleaseIndexEntry(project)
-              saveAndToast({
-                ...project,
-                releaseDraft: {
-                  tag: `v${project.manifest.version}`,
-                  name: project.manifest.name,
-                  url,
-                  createdAt: Date.now(),
-                  releaseIndexEntry
-                }
-              }, 'GitHub release draft created')
-              setEntry(releaseIndexEntry)
-              setResultUrl(url)
-              await notifyStudio(settings, 'Release draft created', `${project.manifest.name} ${project.manifest.version} is ready for review.`)
-            } catch (error) {
-              useStudioStore.getState().setToast(error instanceof Error ? error.message : String(error))
-            } finally {
-              setBusy(false)
-            }
-          }}
-        >
-          Draft Release
-        </Button>
+          confirmTitle="Draft GitHub release?"
+          confirmBody={`This creates a draft release for ${project.manifest.name} ${version}. Confirm signed artifacts and checksums are ready before publishing.`}
+          onConfirm={() => void draftRelease()}
+        />
         <Button mode="outlined" icon="archive-plus-outline" onPress={async () => setEntry(await buildReleaseIndexEntry(project))}>Index Entry</Button>
-        <Button
-          mode="outlined"
+        <ConfirmAction
+          label="Index PR"
           icon="source-pull"
+          mode="outlined"
           disabled={busy}
-          onPress={async () => {
-            setBusy(true)
-            try {
-              const entryText = entry || await buildReleaseIndexEntry(project)
-              setEntry(entryText)
-              const url = await createReleaseIndexPullRequest(project, settings, entryText)
-              setResultUrl(url)
-              await notifyStudio(settings, 'Release Index PR created', `${project.manifest.name} is queued for catalog review.`)
-            } catch (error) {
-              useStudioStore.getState().setToast(error instanceof Error ? error.message : String(error))
-            } finally {
-              setBusy(false)
-            }
-          }}
-        >
-          Index PR
-        </Button>
+          confirmTitle="Open Release Index PR?"
+          confirmBody={`This writes an addons entry to ${settings.releaseIndexOwner}/${settings.releaseIndexRepo} and opens a review PR.`}
+          onConfirm={() => void openIndexPullRequest()}
+        />
       </ActionRow>
       {busy ? <ActivityIndicator /> : null}
+      <Section title="Expected Artifacts">
+        <ArtifactList artifacts={plannedArtifacts} />
+      </Section>
       <TextInput mode="outlined" multiline label="Package Manifest" value={JSON.stringify(packageManifest, null, 2)} editable={false} />
       {entry ? <TextInput mode="outlined" multiline label="Release Index Entry" value={entry} onChangeText={setEntry} /> : null}
       {resultUrl ? <RecordCard title="Release Result" subtitle={resultUrl} onPress={() => openUrl(resultUrl)} /> : null}
@@ -1237,6 +1331,24 @@ function SettingsPanel() {
         >
           Poll Login
         </Button>
+        <Button
+          mode="outlined"
+          icon="shield-check-outline"
+          disabled={busy || !draft.githubToken}
+          onPress={async () => {
+            setBusy(true)
+            try {
+              const access = await validateGitHubAccess(draft)
+              setToast(`GitHub OK: ${access.login}. Scopes: ${access.scopes.join(', ') || 'none reported'}.`)
+            } catch (error) {
+              setToast(error instanceof Error ? error.message : String(error))
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          Check Token
+        </Button>
         {busy ? <ActivityIndicator /> : null}
       </ActionRow>
       {deviceLogin ? <RecordCard title="GitHub Device Code" subtitle={`${deviceLogin.userCode} / expires ${new Date(deviceLogin.expiresAt).toLocaleTimeString()}`} onPress={() => openUrl(deviceLogin.verificationUri)} /> : null}
@@ -1247,6 +1359,16 @@ function SettingsPanel() {
       <Text variant="titleSmall">Release Index</Text>
       <Field label="Release Index Owner" value={draft.releaseIndexOwner} onChangeText={(releaseIndexOwner) => update({ releaseIndexOwner })} />
       <Field label="Release Index Repo" value={draft.releaseIndexRepo} onChangeText={(releaseIndexRepo) => update({ releaseIndexRepo })} />
+      <Text variant="titleSmall">Release Build</Text>
+      <PillRow
+        items={[
+          { key: 'signed', label: 'Signed' },
+          { key: 'debug', label: 'Debug' }
+        ]}
+        selected={[draft.releaseBuildMode]}
+        onToggle={(releaseBuildMode) => update({ releaseBuildMode: releaseBuildMode as MobileSettings['releaseBuildMode'] })}
+      />
+      <Field label="Last Release URL" value={draft.lastReleaseUrl} onChangeText={(lastReleaseUrl) => update({ lastReleaseUrl })} keyboardType="url" />
       <Text variant="titleSmall">Notifications</Text>
       <List.Item
         title="Build, release, and catalog notifications"
@@ -1260,6 +1382,14 @@ function SettingsPanel() {
         <Button mode="outlined" icon="bell-check-outline" onPress={async () => setToast(await ensureNotificationPermissions(draft) ? 'Notifications enabled' : 'Notifications disabled')}>Test Permission</Button>
         <Button mode="contained" icon="content-save" onPress={async () => { await saveSettings(draft); setToast('Settings saved') }}>Save Settings</Button>
       </ActionRow>
+      <Section title="About">
+        <RecordCard title={`${APP_INFO.name} ${APP_INFO.version}`} subtitle={`Build ${APP_INFO.buildHash}`} right={<Chip compact>Android</Chip>} />
+        <ActionRow>
+          <Button mode="outlined" icon="github" onPress={() => openUrl(APP_INFO.repoUrl)}>Repo</Button>
+          <Button mode="outlined" icon="tag-outline" onPress={() => openUrl(APP_INFO.releaseUrl)}>Release</Button>
+          <Button mode="outlined" icon="license" onPress={() => openUrl(APP_INFO.licenseUrl)}>License</Button>
+        </ActionRow>
+      </Section>
     </Section>
   )
 }
@@ -1281,12 +1411,18 @@ export function BuildScreen() {
   const [artifacts, setArtifacts] = useState<BuildArtifactSummary[]>([])
   const [logText, setLogText] = useState(project?.lastBuild?.log ?? '')
   const [testSummary, setTestSummary] = useState(project?.lastBuild?.testSummary ?? null)
+  const plannedArtifacts = project?.releaseArtifacts?.length ? project.releaseArtifacts : expectedReleaseArtifacts(settings.releaseBuildMode)
   if (!project) {
     return <ScreenFrame title="Build">{activeOrEmpty(project)}</ScreenFrame>
   }
   return (
     <ScreenFrame title="Build" subtitle="Remote GitHub Actions build, test, package, and preview scans.">
       <ProjectStrip project={project} />
+      <StatusBanner
+        title={`${settings.releaseBuildMode === 'signed' ? 'Signed release' : 'Debug'} artifact mode`}
+        body="Windows release builds generate APK/AAB assets and SHA256 checksum files for GitHub Releases."
+        tone={settings.releaseBuildMode === 'signed' ? 'good' : 'warn'}
+      />
       <PillRow
         items={['build', 'test', 'validate', 'package', 'preview'].map((item) => ({ key: item, label: item }))}
         selected={[task]}
@@ -1307,6 +1443,7 @@ export function BuildScreen() {
           onPress={async () => {
             setBusy(true)
             try {
+              await validateGitHubAccess(settings, project.github)
               await triggerRemoteBuild(project, settings, task)
               saveAndToast({ ...project, lastBuild: { task: task as 'build', status: 'queued', updatedAt: Date.now() } }, `${task} queued`)
               await notifyStudio(settings, 'Remote build queued', `${project.manifest.name}: ${task}`)
@@ -1326,6 +1463,7 @@ export function BuildScreen() {
           onPress={async () => {
             setBusy(true)
             try {
+              await validateGitHubAccess(settings, project.github)
               const nextRuns = await listRemoteBuildRuns(project, settings)
               setRuns(nextRuns)
               const latest = nextRuns[0]
@@ -1355,6 +1493,9 @@ export function BuildScreen() {
         {busy ? <ActivityIndicator /> : null}
       </ActionRow>
       {!project.github ? <Text style={styles.muted}>Configure a GitHub target in Content / Sync.</Text> : null}
+      <Section title="Release Artifacts">
+        <ArtifactList artifacts={plannedArtifacts} />
+      </Section>
       {runs.map((run) => (
         <RecordCard
           key={run.id}

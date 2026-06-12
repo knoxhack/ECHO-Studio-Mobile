@@ -1,6 +1,6 @@
 {
   "name": "echo-studio-mobile",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "index.ts",
   "workspaces": [
     "packages/*"
@@ -39,6 +39,7 @@
     "android:prebuild": "expo prebuild --platform android",
     "android:assemble": "cd android && gradlew.bat assembleDebug",
     "android:assemble:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-android-debug.ps1",
+    "android:release:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-android-release.ps1",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit"

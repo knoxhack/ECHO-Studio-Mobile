@@ -45,9 +45,12 @@ export interface EchoMobileProject {
   lastBuild?: RemoteBuildState
   lastValidation?: ValidationReport
   releaseDraft?: ReleaseDraftState
+  releaseArtifacts?: ReleaseArtifact[]
   createdAt: number
   updatedAt: number
 }
+
+export type ReleaseBuildMode = 'debug' | 'signed'
 
 export interface MobileSettings {
   githubToken: string
@@ -60,6 +63,9 @@ export interface MobileSettings {
   defaultBranch: string
   notificationsEnabled: boolean
   onboardingComplete: boolean
+  releaseBuildMode: ReleaseBuildMode
+  lastReleaseUrl: string
+  dismissedPolishHints: string[]
 }
 
 export interface EchoFilePatch {
@@ -103,6 +109,15 @@ export interface BuildArtifactSummary {
   sizeInBytes?: number
   url?: string
   expired?: boolean
+}
+
+export interface ReleaseArtifact {
+  name: string
+  path: string
+  sha256: string
+  bytes: number
+  kind: 'debug-apk' | 'release-apk' | 'release-aab' | 'checksum' | 'workflow-archive'
+  createdAt: number
 }
 
 export interface BuildTestSummary {

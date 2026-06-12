@@ -16,6 +16,16 @@ import type {
 const GITHUB_API = 'https://api.github.com'
 const GITHUB_LOGIN = 'https://github.com/login'
 
+function actionableGitHubError(status: number, body: string, path: string): Error {
+  const detail = body ? ` ${body}` : ''
+  if (status === 401) return new Error('GitHub token is invalid or expired. Reconnect in Settings, then retry.')
+  if (status === 403) return new Error(`GitHub denied this action. Check token scopes for repo/workflow access or rate limits.${detail}`)
+  if (status === 404) return new Error(`GitHub could not find this repo, branch, workflow, or file. Check the owner/repo/branch and token permissions. (${path})`)
+  if (status === 409) return new Error('GitHub reported a conflict. Pull first, resolve conflicts, then retry the push or PR.')
+  if (status === 422) return new Error(`GitHub rejected the request. Check for an existing branch/PR, duplicate tag/release, or invalid workflow input.${detail}`)
+  return new Error(`GitHub ${status}: ${body || 'Request failed.'}`)
+}
+
 async function githubRequest<T>(
   settings: MobileSettings,
   path: string,
@@ -34,7 +44,7 @@ async function githubRequest<T>(
   })
   if (!response.ok) {
     const body = await response.text()
-    throw new Error(`GitHub ${response.status}: ${body || response.statusText}`)
+    throw actionableGitHubError(response.status, body || response.statusText, path)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
@@ -55,7 +65,7 @@ async function githubTextRequest(
   })
   if (!response.ok) {
     const body = await response.text()
-    throw new Error(`GitHub ${response.status}: ${body || response.statusText}`)
+    throw actionableGitHubError(response.status, body || response.statusText, path)
   }
   return response.text()
 }
@@ -79,6 +89,13 @@ interface GitHubErrorBody {
   error?: string
   error_description?: string
   interval?: number
+}
+
+export interface GitHubAccessCheck {
+  login: string
+  scopes: string[]
+  repo?: string
+  branch?: string
 }
 
 function repoPath(target: GitHubTarget, suffix: string): string {
@@ -195,6 +212,36 @@ export async function pollGitHubDeviceLogin(clientId: string, state: GitHubDevic
   if (json.error === 'authorization_pending') return { message: 'Waiting for GitHub authorization.' }
   if (json.error === 'slow_down') return { nextInterval: (state.interval ?? 5) + 5, message: 'GitHub asked this device to poll slower.' }
   throw new Error(json.error_description ?? json.error ?? 'GitHub login failed.')
+}
+
+export async function validateGitHubAccess(
+  settings: MobileSettings,
+  target?: GitHubTarget
+): Promise<GitHubAccessCheck> {
+  if (!settings.githubToken.trim()) throw new Error('GitHub token is not configured.')
+  const userResponse = await fetch(`${GITHUB_API}/user`, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${settings.githubToken.trim()}`,
+      'X-GitHub-Api-Version': '2022-11-28'
+    }
+  })
+  if (!userResponse.ok) {
+    const body = await userResponse.text()
+    throw actionableGitHubError(userResponse.status, body || userResponse.statusText, '/user')
+  }
+  const user = await userResponse.json() as { login?: string }
+  const scopes = (userResponse.headers.get('x-oauth-scopes') ?? '')
+    .split(',')
+    .map((scope) => scope.trim())
+    .filter(Boolean)
+  if (target?.owner && target.repo) {
+    await githubRequest(settings, repoPath(target, ''))
+    const branch = target.branch || settings.defaultBranch
+    await githubRequest(settings, repoPath(target, `/branches/${encodeURIComponent(branch)}`))
+    return { login: user.login ?? 'unknown', scopes, repo: `${target.owner}/${target.repo}`, branch }
+  }
+  return { login: user.login ?? 'unknown', scopes }
 }
 
 export async function pushProjectToGitHub(

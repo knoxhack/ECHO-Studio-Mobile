@@ -30,7 +30,10 @@ export const DEFAULT_SETTINGS: MobileSettings = {
   releaseIndexRepo: 'ECHO-Release-Index',
   defaultBranch: 'main',
   notificationsEnabled: true,
-  onboardingComplete: false
+  onboardingComplete: false,
+  releaseBuildMode: 'signed',
+  lastReleaseUrl: '',
+  dismissedPolishHints: []
 }
 
 interface ProjectRow {

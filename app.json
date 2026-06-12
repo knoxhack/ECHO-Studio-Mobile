@@ -2,7 +2,7 @@
   "expo": {
     "name": "ECHO-Studio-Mobile",
     "slug": "echo-studio-mobile",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "scheme": "echostudio",
     "icon": "./assets/icon.png",
@@ -16,6 +16,7 @@
     },
     "android": {
       "package": "dev.echo.studiomobile",
+      "versionCode": 2,
       "adaptiveIcon": {
         "backgroundColor": "#071018",
         "foregroundImage": "./assets/android-icon-foreground.png",
