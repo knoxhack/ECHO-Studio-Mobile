@@ -1,17 +1,23 @@
 {
   "expo": {
     "name": "ECHO-Studio-Mobile",
-    "slug": "ECHO-Studio-Mobile",
+    "slug": "echo-studio-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
+    "scheme": "echostudio",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
+    "plugins": [
+      "expo-secure-store",
+      "expo-notifications"
+    ],
     "ios": {
       "supportsTablet": true
     },
     "android": {
+      "package": "dev.echo.studiomobile",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#071018",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
