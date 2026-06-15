@@ -50,6 +50,8 @@ import {
   buildReleaseIndexEntry,
   createReleaseIndexPullRequest,
   createGitHubReleaseDraft,
+  fetchModuleContentGraph,
+  fetchContentGraphEvidence,
   fetchReleaseIndexCatalog,
   fetchWorkflowRunLogText,
   listWorkflowArtifacts,
@@ -97,6 +99,7 @@ import {
   ViewTabs,
   styles
 } from './components'
+import type { ContentGraphSummary, EchoContentGraph, EchoContentGraphEvidence } from './contentGraphTypes'
 import type {
   AiChatResult,
   BuildArtifactSummary,
@@ -106,7 +109,8 @@ import type {
   GitHubDeviceCodeState,
   MobileSettings,
   ReleaseArtifact,
-  ReleaseIndexCatalogEntry
+  ReleaseIndexCatalogEntry,
+  ReleaseIndexCatalogArtifact
 } from './mobileTypes'
 
 const TYPE_ITEMS = Object.entries(ADDON_TYPE_LABELS).map(([key, label]) => ({ key, label }))
@@ -492,7 +496,7 @@ export function CreateScreen({ navigation }: { navigation: { navigate: (screen: 
   )
 }
 
-type ContentView = 'manifest' | 'modules' | 'editors' | 'validation' | 'tasks' | 'sync' | 'catalog' | 'release' | 'settings'
+type ContentView = 'manifest' | 'modules' | 'editors' | 'validation' | 'tasks' | 'sync' | 'catalog' | 'graph' | 'release' | 'settings'
 
 export function ContentScreen() {
   const project = useActiveProject()
@@ -533,6 +537,7 @@ export function ContentScreen() {
         onSelect={(value) => setView(value as ContentView)}
         items={[
           { key: 'catalog', label: 'Catalog', icon: 'archive-search-outline' },
+          { key: 'graph', label: 'Graph', icon: 'git-graph' },
           { key: 'release', label: 'Release', icon: 'tag-plus-outline' },
           { key: 'settings', label: 'Settings', icon: 'cog-outline' }
         ]}
@@ -544,6 +549,7 @@ export function ContentScreen() {
       {view === 'tasks' ? <CodexTasksPanel project={project} /> : null}
       {view === 'sync' ? <SyncPanel project={project} /> : null}
       {view === 'catalog' ? <CatalogPanel project={project} /> : null}
+      {view === 'graph' ? <ContentGraphPanel project={project} /> : null}
       {view === 'release' ? <ReleasePanel project={project} /> : null}
       {view === 'settings' ? <SettingsPanel /> : null}
     </ScreenFrame>
@@ -1171,6 +1177,206 @@ function CatalogPanel({ project }: { project: EchoMobileProject }) {
           }}
         />
       ))}
+    </Section>
+  )
+}
+
+function summarizeGraph(graph: EchoContentGraph): ContentGraphSummary {
+  const nodeKinds: Record<string, number> = {}
+  const edgeKinds: Record<string, number> = {}
+  for (const node of graph.nodes ?? []) {
+    nodeKinds[node.kind] = (nodeKinds[node.kind] ?? 0) + 1
+  }
+  for (const edge of graph.edges ?? []) {
+    edgeKinds[edge.kind] = (edgeKinds[edge.kind] ?? 0) + 1
+  }
+  const hytalePlan = graph.exportPlans?.hytale
+  const hytaleBlockers = (hytalePlan?.nodes ?? [])
+    .filter((node) => node.status === 'blocked')
+    .map((node) => `${node.nodeId}${node.rationale ? `: ${node.rationale}` : ''}`)
+  return {
+    moduleId: graph.moduleId || graph.id || 'unknown',
+    moduleName: graph.moduleId || graph.id || 'unknown',
+    source: 'content-graph-sidecar',
+    evidenceSchemaVersion: graph.schemaVersion,
+    nodeCount: graph.nodes?.length ?? 0,
+    edgeCount: graph.edges?.length ?? 0,
+    featureCount: graph.features?.features?.length ?? 0,
+    exportPlanCount: graph.exportPlans ? Object.keys(graph.exportPlans).length : 0,
+    nodeKinds,
+    edgeKinds,
+    hytaleBlockers,
+    hytaleBlockerCount: hytaleBlockers.length,
+    unresolvedReferences: graph.unresolvedReferences?.length ?? 0
+  }
+}
+
+function summariesFromEvidence(evidence: EchoContentGraphEvidence, moduleIds: string[]): ContentGraphSummary[] {
+  const wanted = new Set(moduleIds)
+  return (evidence.modules ?? [])
+    .filter((module) => wanted.has(module.moduleId))
+    .map((module) => ({
+      moduleId: module.moduleId,
+      moduleName: module.moduleId,
+      source: 'release-evidence',
+      evidenceSchemaVersion: evidence.schemaVersion,
+      nodeCount: module.nodeCount,
+      edgeCount: module.edgeCount,
+      featureCount: module.featureCount,
+      exportPlanCount: module.exportPlanCount,
+      nodeKinds: {},
+      edgeKinds: {},
+      hytaleBlockers: module.hytaleBlockers ?? [],
+      hytaleBlockerCount: module.hytaleBlockerCount,
+      unresolvedReferences: module.unresolvedReferenceCount ?? 0,
+      validationState: module.validationState
+    }))
+}
+
+function ContentGraphPanel({ project }: { project: EchoMobileProject }) {
+  const settings = useStudioStore((state) => state.settings)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [summaries, setSummaries] = useState<ContentGraphSummary[]>([])
+
+  const loadGraphs = async () => {
+    setBusy(true)
+    setMessage('')
+    try {
+      const plan = resolveProjectModulePlan(project.manifest)
+      const moduleIds = Array.from(new Set(plan.closure.map((module) => module.id)))
+      if (moduleIds.length === 0) {
+        setMessage('No modules resolved for this project. Add target or required modules.')
+        setSummaries([])
+        return
+      }
+      const catalog = await fetchReleaseIndexCatalog(settings)
+      const byModuleId = new Map<string, ReleaseIndexCatalogEntry>()
+      for (const entry of catalog) {
+        if (entry.id) byModuleId.set(entry.id, entry)
+      }
+      const evidenceUrls = new Set<string>()
+      for (const entry of catalog) {
+        const artifacts = entry.artifacts ?? {}
+        const explicitEvidence = artifacts['content-graph-evidence'] ?? artifacts.contentGraphEvidence
+        if (explicitEvidence?.url) evidenceUrls.add(explicitEvidence.url)
+        for (const artifact of Object.values(artifacts)) {
+          if ((artifact.artifactRole === 'content-graph-evidence' || artifact.file === 'content-graph-evidence.json') && artifact.url) {
+            evidenceUrls.add(artifact.url)
+          }
+        }
+      }
+      for (const evidenceUrl of evidenceUrls) {
+        const evidence = await fetchContentGraphEvidence(evidenceUrl)
+        if (!evidence) continue
+        const releaseEvidenceSummaries = summariesFromEvidence(evidence, moduleIds)
+        if (releaseEvidenceSummaries.length > 0) {
+          setSummaries(releaseEvidenceSummaries)
+          setMessage(`Loaded ${releaseEvidenceSummaries.length} module summary record(s) from canonical release evidence.`)
+          return
+        }
+      }
+      const results: ContentGraphSummary[] = []
+      for (const moduleId of moduleIds) {
+        const entry = byModuleId.get(moduleId)
+        const artifact: ReleaseIndexCatalogArtifact | undefined = entry?.artifacts?.['content-graph']
+        if (!artifact?.url) continue
+        const graph = await fetchModuleContentGraph(artifact.url)
+        if (graph) results.push(summarizeGraph(graph))
+      }
+      setSummaries(results)
+      if (results.length === 0) {
+        setMessage(`No content-graph artifacts found for ${moduleIds.length} resolved module(s).`)
+      } else {
+        setMessage(`Loaded ${results.length} module sidecar graph(s); canonical release evidence was not indexed.`)
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const totalNodes = summaries.reduce((sum, summary) => sum + summary.nodeCount, 0)
+  const totalEdges = summaries.reduce((sum, summary) => sum + summary.edgeCount, 0)
+  const totalFeatures = summaries.reduce((sum, summary) => sum + summary.featureCount, 0)
+  const totalExportPlans = summaries.reduce((sum, summary) => sum + summary.exportPlanCount, 0)
+  const totalBlockers = summaries.reduce((sum, summary) => sum + (summary.hytaleBlockerCount ?? summary.hytaleBlockers.length), 0)
+  const totalUnresolved = summaries.reduce((sum, summary) => sum + summary.unresolvedReferences, 0)
+
+  return (
+    <Section title="Content Graph">
+      <StatusBanner
+        title=".ECHO Content Graph Evidence"
+        body="Prefers canonical release evidence from content-graph-evidence.json and falls back to per-module content-graph sidecars when the aggregate artifact is missing. Hytale status is export planning evidence, not runtime support."
+        tone="neutral"
+      />
+      <ActionRow>
+        <Button
+          mode="contained"
+          icon="cloud-refresh-outline"
+          disabled={busy}
+          onPress={() => void loadGraphs()}
+        >
+          Load Graphs
+        </Button>
+        {busy ? <ActivityIndicator /> : null}
+      </ActionRow>
+      {message ? <RecordCard title="Graph Status" subtitle={message} /> : null}
+      {summaries.length > 0 ? (
+        <>
+          <View style={styles.rowWrap}>
+            <Metric label="Modules" value={summaries.length} />
+            <Metric label="Nodes" value={totalNodes} />
+            <Metric label="Edges" value={totalEdges} />
+            <Metric label="Features" value={totalFeatures} />
+            <Metric label="Export Plans" value={totalExportPlans} />
+            <Metric label="Blockers" value={totalBlockers} tone={totalBlockers ? 'bad' : 'good'} />
+            <Metric label="Unresolved" value={totalUnresolved} tone={totalUnresolved ? 'warn' : 'good'} />
+          </View>
+          {summaries.map((summary) => (
+            <Section key={summary.moduleId} title={summary.moduleId}>
+              <View style={styles.rowWrap}>
+                <Metric label="Nodes" value={summary.nodeCount} />
+                <Metric label="Edges" value={summary.edgeCount} />
+                <Metric label="Features" value={summary.featureCount} />
+                <Metric label="Export Plans" value={summary.exportPlanCount} />
+                <Metric label="Blockers" value={summary.hytaleBlockerCount ?? summary.hytaleBlockers.length} tone={(summary.hytaleBlockerCount ?? summary.hytaleBlockers.length) ? 'bad' : 'good'} />
+                <Metric label="Unresolved" value={summary.unresolvedReferences} tone={summary.unresolvedReferences ? 'warn' : 'good'} />
+              </View>
+              <View style={styles.rowWrap}>
+                {summary.source ? <Chip compact>{summary.source === 'release-evidence' ? 'Release evidence' : 'Sidecar fallback'}</Chip> : null}
+                {summary.evidenceSchemaVersion ? <Chip compact>{summary.evidenceSchemaVersion}</Chip> : null}
+                {summary.validationState ? <Chip compact>{summary.validationState}</Chip> : null}
+              </View>
+              <Text variant="titleSmall">Node Kinds</Text>
+              <View style={styles.rowWrap}>
+                {Object.entries(summary.nodeKinds).map(([kind, count]) => (
+                  <Chip key={kind} compact>{kind}: {count}</Chip>
+                ))}
+                {Object.keys(summary.nodeKinds).length === 0 ? <Text style={styles.muted}>No nodes</Text> : null}
+              </View>
+              <Text variant="titleSmall">Edge Kinds</Text>
+              <View style={styles.rowWrap}>
+                {Object.entries(summary.edgeKinds).map(([kind, count]) => (
+                  <Chip key={kind} compact>{kind}: {count}</Chip>
+                ))}
+                {Object.keys(summary.edgeKinds).length === 0 ? <Text style={styles.muted}>No edges</Text> : null}
+              </View>
+              {summary.hytaleBlockers.length > 0 ? (
+                <>
+                  <Text variant="titleSmall">Hytale Blockers</Text>
+                  {summary.hytaleBlockers.map((blocker, index) => (
+                    <RecordCard key={`${summary.moduleId}-blocker-${index}`} title={`Blocked ${index + 1}`} subtitle={blocker} />
+                  ))}
+                </>
+              ) : null}
+            </Section>
+          ))}
+        </>
+      ) : !busy && !message ? (
+        <EmptyState title="No graph evidence loaded" body="Tap Load Graphs to fetch content-graph artifacts from the Release Index." />
+      ) : null}
     </Section>
   )
 }

@@ -9,9 +9,18 @@ import type {
   GitHubDeviceCodeState,
   GitHubTarget,
   MobileSettings,
+  ReleaseIndexCatalogArtifact,
   ReleaseIndexCatalogEntry,
   SyncResult
 } from './mobileTypes'
+import type {
+  EchoContentGraph,
+  EchoContentGraphEvidence,
+  EchoContentGraphEdge,
+  EchoContentGraphNode,
+  EchoContentGraphUnresolvedReference,
+  EchoExportPlan
+} from './contentGraphTypes'
 
 const GITHUB_API = 'https://api.github.com'
 const GITHUB_LOGIN = 'https://github.com/login'
@@ -467,7 +476,7 @@ export async function fetchReleaseIndexCatalog(settings: MobileSettings): Promis
     `/repos/${target.owner}/${target.repo}/git/trees/${branch}?recursive=1`
   )
   const entries = (tree.tree ?? [])
-    .filter((entry) => entry.type === 'blob' && entry.path.endsWith('.json') && /(^|\/)(addons|packs|channels)\//.test(entry.path))
+    .filter((entry) => entry.type === 'blob' && entry.path.endsWith('.json') && /(^|\/)(addons|modules|packs|channels)\//.test(entry.path))
     .slice(0, 80)
   const catalog: ReleaseIndexCatalogEntry[] = []
   for (const entry of entries) {
@@ -477,6 +486,9 @@ export async function fetchReleaseIndexCatalog(settings: MobileSettings): Promis
         `/repos/${target.owner}/${target.repo}/contents/${contentPath(entry.path)}?ref=${encodeURIComponent(branch)}`
       )
       const json = JSON.parse(text) as Record<string, unknown>
+      const artifacts = typeof json.artifacts === 'object' && json.artifacts
+        ? json.artifacts as Record<string, ReleaseIndexCatalogArtifact>
+        : undefined
       catalog.push({
         id: String(json.id ?? entry.path),
         name: String(json.name ?? json.title ?? entry.path),
@@ -487,6 +499,7 @@ export async function fetchReleaseIndexCatalog(settings: MobileSettings): Promis
         validation: typeof json.validation === 'object' && json.validation
           ? json.validation as ReleaseIndexCatalogEntry['validation']
           : undefined,
+        artifacts,
         path: entry.path
       })
     } catch {
@@ -494,6 +507,50 @@ export async function fetchReleaseIndexCatalog(settings: MobileSettings): Promis
     }
   }
   return catalog
+}
+
+export async function fetchModuleContentGraph(url: string): Promise<EchoContentGraph | null> {
+  try {
+    const response = await fetch(url)
+    if (!response.ok) return null
+    const json = (await response.json()) as Record<string, unknown>
+    const toArray = <T>(value: unknown): T[] => Array.isArray(value) ? (value as T[]) : []
+    const exportPlans: Record<string, EchoExportPlan> | undefined =
+      typeof json.exportPlans === 'object' && json.exportPlans
+        ? (json.exportPlans as Record<string, EchoExportPlan>)
+        : undefined
+    return {
+      schemaVersion: String(json.schemaVersion ?? ''),
+      id: String(json.id ?? ''),
+      moduleId: String(json.moduleId ?? ''),
+      generatedAt: String(json.generatedAt ?? ''),
+      modules: toArray<string>(json.modules),
+      provenance: typeof json.provenance === 'object' && json.provenance
+        ? (json.provenance as EchoContentGraph['provenance'])
+        : undefined,
+      nodes: toArray<EchoContentGraphNode>(json.nodes),
+      edges: toArray<EchoContentGraphEdge>(json.edges),
+      unresolvedReferences: toArray<EchoContentGraphUnresolvedReference>(json.unresolvedReferences),
+      exportPlans,
+      features: typeof json.features === 'object' && json.features
+        ? (json.features as EchoContentGraph['features'])
+        : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
+export async function fetchContentGraphEvidence(url: string): Promise<EchoContentGraphEvidence | null> {
+  try {
+    const response = await fetch(url)
+    if (!response.ok) return null
+    const json = (await response.json()) as Record<string, unknown>
+    if (json.schemaVersion !== 'echo.content_graph.evidence.v1') return null
+    return json as unknown as EchoContentGraphEvidence
+  } catch {
+    return null
+  }
 }
 
 export async function createReleaseIndexPullRequest(

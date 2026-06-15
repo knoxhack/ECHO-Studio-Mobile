@@ -127,6 +127,18 @@ export interface BuildTestSummary {
   skipped: number
 }
 
+export interface ReleaseIndexCatalogArtifact {
+  file?: string
+  url?: string
+  sha256?: string
+  size?: number
+  runtimeTarget?: string
+  buildMode?: string
+  schemaVersion?: string
+  artifactRole?: string
+  contains?: string[]
+}
+
 export interface ReleaseIndexCatalogEntry {
   id: string
   name: string
@@ -140,6 +152,7 @@ export interface ReleaseIndexCatalogEntry {
     blockers?: number
     errors?: number
   }
+  artifacts?: Record<string, ReleaseIndexCatalogArtifact>
 }
 
 export interface GitHubDeviceCodeState {
