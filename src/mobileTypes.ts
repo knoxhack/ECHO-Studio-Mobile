@@ -142,10 +142,13 @@ export interface ReleaseIndexCatalogArtifact {
 export interface ReleaseIndexCatalogEntry {
   id: string
   name: string
+  kind?: string
   version?: string
   channel?: string
   description?: string
   source?: string
+  sourceRepo?: string
+  releaseTag?: string
   path: string
   validation?: {
     publishingReady?: boolean

@@ -1233,6 +1233,29 @@ function summariesFromEvidence(evidence: EchoContentGraphEvidence, moduleIds: st
     }))
 }
 
+function mostCommonModuleReleaseTag(catalog: ReleaseIndexCatalogEntry[]): string | undefined {
+  const counts = new Map<string, number>()
+  for (const entry of catalog) {
+    if (entry.sourceRepo !== 'knoxhack/ECHO-Modules' || !entry.releaseTag) continue
+    counts.set(entry.releaseTag, (counts.get(entry.releaseTag) ?? 0) + 1)
+  }
+  return [...counts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0]
+}
+
+function contentGraphEvidenceSourceLabel(
+  evidenceUrl: string,
+  evidenceSources: Map<string, Map<string, number>>,
+  primaryReleaseTag?: string
+): string {
+  const sources = evidenceSources.get(evidenceUrl)
+  if (!sources?.size) return 'canonical release evidence'
+  const rows = [...sources.entries()].sort((left, right) => right[1] - left[1])
+  const hasPrimary = primaryReleaseTag ? sources.has(primaryReleaseTag) : false
+  const state = hasPrimary ? 'full release evidence' : 'partial hotfix evidence'
+  const tagSummary = rows.map(([tag, count]) => `${count} row(s) from ${tag}`).join(', ')
+  return `${state} (${tagSummary})`
+}
+
 function ContentGraphPanel({ project }: { project: EchoMobileProject }) {
   const settings = useStudioStore((state) => state.settings)
   const [busy, setBusy] = useState(false)
@@ -1251,28 +1274,50 @@ function ContentGraphPanel({ project }: { project: EchoMobileProject }) {
         return
       }
       const catalog = await fetchReleaseIndexCatalog(settings)
+      const primaryModuleReleaseTag = mostCommonModuleReleaseTag(catalog)
       const byModuleId = new Map<string, ReleaseIndexCatalogEntry>()
       for (const entry of catalog) {
         if (entry.id) byModuleId.set(entry.id, entry)
       }
       const evidenceUrls = new Set<string>()
+      const evidenceSources = new Map<string, Map<string, number>>()
+      const addEvidenceUrl = (
+        entry: ReleaseIndexCatalogEntry,
+        artifact?: ReleaseIndexCatalogArtifact,
+        seenUrls?: Set<string>
+      ) => {
+        if (!artifact?.url) return
+        if (seenUrls?.has(artifact.url)) return
+        seenUrls?.add(artifact.url)
+        evidenceUrls.add(artifact.url)
+        const releaseTag = entry.releaseTag ?? 'unknown release tag'
+        const sources = evidenceSources.get(artifact.url) ?? new Map<string, number>()
+        sources.set(releaseTag, (sources.get(releaseTag) ?? 0) + 1)
+        evidenceSources.set(artifact.url, sources)
+      }
       for (const entry of catalog) {
         const artifacts = entry.artifacts ?? {}
+        const seenEvidenceUrls = new Set<string>()
         const explicitEvidence = artifacts['content-graph-evidence'] ?? artifacts.contentGraphEvidence
-        if (explicitEvidence?.url) evidenceUrls.add(explicitEvidence.url)
+        addEvidenceUrl(entry, explicitEvidence, seenEvidenceUrls)
         for (const artifact of Object.values(artifacts)) {
           if ((artifact.artifactRole === 'content-graph-evidence' || artifact.file === 'content-graph-evidence.json') && artifact.url) {
-            evidenceUrls.add(artifact.url)
+            addEvidenceUrl(entry, artifact, seenEvidenceUrls)
           }
         }
       }
-      for (const evidenceUrl of evidenceUrls) {
+      const orderedEvidenceUrls = [...evidenceUrls].sort((left, right) => {
+        const leftHasPrimary = primaryModuleReleaseTag ? evidenceSources.get(left)?.has(primaryModuleReleaseTag) : false
+        const rightHasPrimary = primaryModuleReleaseTag ? evidenceSources.get(right)?.has(primaryModuleReleaseTag) : false
+        return Number(rightHasPrimary) - Number(leftHasPrimary)
+      })
+      for (const evidenceUrl of orderedEvidenceUrls) {
         const evidence = await fetchContentGraphEvidence(evidenceUrl)
         if (!evidence) continue
         const releaseEvidenceSummaries = summariesFromEvidence(evidence, moduleIds)
         if (releaseEvidenceSummaries.length > 0) {
           setSummaries(releaseEvidenceSummaries)
-          setMessage(`Loaded ${releaseEvidenceSummaries.length} module summary record(s) from canonical release evidence.`)
+          setMessage(`Loaded ${releaseEvidenceSummaries.length} module summary record(s) from ${contentGraphEvidenceSourceLabel(evidenceUrl, evidenceSources, primaryModuleReleaseTag)}.`)
           return
         }
       }

@@ -492,10 +492,13 @@ export async function fetchReleaseIndexCatalog(settings: MobileSettings): Promis
       catalog.push({
         id: String(json.id ?? entry.path),
         name: String(json.name ?? json.title ?? entry.path),
+        kind: json.kind ? String(json.kind) : undefined,
         version: json.version ? String(json.version) : undefined,
         channel: json.channel ? String(json.channel) : undefined,
         description: json.description ? String(json.description) : undefined,
         source: json.source ? String(json.source) : undefined,
+        sourceRepo: json.sourceRepo ? String(json.sourceRepo) : undefined,
+        releaseTag: json.releaseTag ? String(json.releaseTag) : undefined,
         validation: typeof json.validation === 'object' && json.validation
           ? json.validation as ReleaseIndexCatalogEntry['validation']
           : undefined,
